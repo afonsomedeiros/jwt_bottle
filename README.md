@@ -1,5 +1,20 @@
 # Plugin que implementa autenticação com JWT para o aplicações Bottle.
 
+### Instalação.
+
+É necessário instalar `bottle` (por se tratar de um plugin para aplicações com bottle) em seguida pode realizar a instalação do plugin.
+
+```sh
+$ pip install bottle
+```
+
+Caso aconteça algum erro com relação a importação de módulo do python-jose ou pycrypto, pode instalar os pacotes abaixo também.
+
+```sh
+$ pip install python-jose
+$ pip install pycrypto
+```
+
 Exemplo de uso:
 
 ```py
