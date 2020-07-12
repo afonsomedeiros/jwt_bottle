@@ -1,7 +1,6 @@
 import bottle
 import re
 from operator import attrgetter
-from peewee import DoesNotExist, Model
 from bottle import PluginError
 
 from .jwt_auth import Token
@@ -20,10 +19,10 @@ class JWTPlugin(object):
 
     Args:
         secret (str): Segredo para criptografar Token
-        auth_model (Peewee Model): Classe baseada no peewee model
-        que referencia a classe que deve ser utilizada para autenticação.
-        obs: A Classe peewee para autenticação deve obedecer um determinado padrão
-        para que funcione corretamente.
+        auth_model (Python class): Classe que provê métodos de autenticação.
+        A classe precisa implementar dois métodos estáticos:
+            - authenticate.
+            - get_user
         auth_endpoint (str): Rota de autenticação. Padrão é "/auth"
         refresh (bool): Determina se é ou não para que token seja atualizavel.
 
@@ -37,7 +36,7 @@ class JWTPlugin(object):
     name = "JWTPlugin"
     api = 2
 
-    def __init__(self, secret, auth_model: Model, auth_endpoint="/auth", refresh=False):
+    def __init__(self, secret, auth_model, auth_endpoint="/auth", refresh=False):
         self.secret = secret
         self.auth_model = auth_model
         self.refresh = refresh
@@ -48,24 +47,17 @@ class JWTPlugin(object):
             if not isinstance(other, JWTPlugin):
                 @app.post(self.auth_endpoint)
                 def auth_handler():
-                    data = bottle.request.json
-                    l = []
-                    password = ''
-                    for k in data.keys():
-                        if re.match(email_re, data[k]):
-                            l.append(attrgetter(k)(self.auth_model)==data[k])
+                    if hasattr(self.auth_model, 'authenticate') and hasattr(self.auth_model, 'get_user'):
+                        data = bottle.request.json
+                        user = self.auth_model.authenticate(**data)
+                        if user:
+                            payload = {'id': user.id, 'exp': ''}
+                            token = Token(payload=payload, secret=self.secret)
+                            return {"token": token.create()}
                         else:
-                            password = data[k]
-                    user = self.auth_model.get(*l)
-                    if user.verify(password):
-                        payload = {
-                            'id': user.id,
-                            'exp': ''
-                        }
-                        token = Token(payload=payload, secret=self.secret)
-                        return {"token": token.create()}
+                            return {'error': "Usuário inválido."}
                     else:
-                        return {'error': "Usuário inválido."}
+                        return {'error': "Classe utilizada para auntenticação não atende o padrão"}
 
             else:
                 raise PluginError("Encontrado uma outra instancia do plugin.")
@@ -79,12 +71,18 @@ class JWTPlugin(object):
 
         def wrapper(*args, **kwargs):
             t = bottle.request.get_header('Authorization')
+
             if self.refresh:
                 token = Token(secret=self.secret).refresh(t)
                 decoded = Token(secret=self.secret).decode(token)
+                kwargs['token'] = token
             else:
                 decoded = Token(secret=self.secret).decode(t)
-            kwargs['user'] = self.auth_model.get(attrgetter('id')(self.auth_model)==decoded['id'])
-            return injector(*args, **kwargs)
+
+            if hasattr(self.auth_model, 'authenticate') and hasattr(self.auth_model, 'get_user'):
+                kwargs['user'] = self.auth_model.get_user(decoded['id'])
+                return injector(*args, **kwargs)
+            else:
+                return {'error': "Classe utilizada para auntenticação não atende o padrão"}
 
         return wrapper

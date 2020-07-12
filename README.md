@@ -4,9 +4,10 @@ Exemplo de uso:
 
 ```py
 import bottle
-from JwtPlugin import JWTPlugin, auth_required
-from peewee import SqliteDatabase, Model, CharField, DateField, DoesNotExist
-from passlib.hash import pbkdf2_sha512 as hsh # aqui utilizei o pass lib, mas a escolha é livre.
+from jwt_bottle import JWTPlugin, auth_required
+from peewee import (SqliteDatabase, Model, CharField,
+                    DateField, DoesNotExist) # aqui utilizei o peewee, mas a escolha é livre.
+from passlib.hash import pbkdf2_sha512 as hsh # aqui utilizei o passlib, mas a escolha é livre.
 from hashlib import md5
 
 
@@ -14,6 +15,8 @@ db = SqliteDatabase(":memory:")
 
 
 class Users(Model):
+    """Classe usuário.
+    """
     name = CharField(max_length=50)
     last_name = CharField(max_length=50)
     email = CharField(max_length=200)
@@ -33,9 +36,65 @@ class Users(Model):
     class Meta:
         database = db
 
+
+class Auth(object):
+    """Classe para autenticação.
+    Precisa conter um método estático chamado authenticate e outro
+    chamado get_user.
+
+    Os parametros de authenticate ficam a critério do método post.
+
+    O padrão é receber uma requisição POST enviando dados no formato JSON.
+    Esses dados são empacotados no argumento kwargs do método authenticate.
+
+    para identificar o usuário é necessário realizar a consulta utilizando
+    um ID.
+    """
+
+    @staticmethod
+    def authenticate(*args, **kwargs):
+        """Método para autenticação, aqui utilizei uma classe chamada
+        Users implementada com o ORM peewee e uma simples regra de 
+        autenticação apresentada pelo Eduardo Mendes.
+        link: https://www.youtube.com/watch?v=ieGA91ExOH0
+
+        Returns:
+            Users: dicionário contendo id para gerar o token.
+            OBS: é necessário possuir um atributo "id" para gerar o token.
+        """
+        try:
+            if "email" in kwargs and "password" in kwargs:
+                user = Users.get(Users.email==kwargs['email'])
+                if user.verify(kwargs['password']):
+                    return user
+            return None
+        except DoesNotExist as err:
+            return {"erro": f"Usuário {kwargs['email']} não localizado"}
+
+    @staticmethod
+    def get_user(user_id: int):
+        """Classe para resgatar usuario autenticado
+        utilizando a decodificação de um token.
+
+        Args:
+            user_id ([int]): identificador do usuário.
+
+        Returns:
+            Users: retorna usuário autenticado pelo Token.
+        """
+        try:
+            user = Users.get_by_id(user_id)
+            if user:
+                return user
+            return None
+        except DoesNotExist as err:
+            return {"erro": f"Usuário {kwargs['email']} não localizado"}
+
+
+
 app = bottle.Bottle()
 
-jwt = JWTPlugin("asfasdf", Users)
+jwt = JWTPlugin("asfasdf", Auth)
 
 app.install(jwt)
 
@@ -82,6 +141,12 @@ Server: WSGIServer/0.2 CPython/3.8.2
 Usuario: Afonso
 ```
 
-A classe usuario precisa possuir um campo para "email", "password", precisa implementar os métodos "gen_hash" e "verify". A autenticação só é valida utilizando um endereço de email válido, caso queira utilizar outro campo para autenticação que não siga o padrão de um email, deverá realizar a alteração no modo "hard code" isto é, alterando o plugin na mão.
+-> Desatualizado ~A classe usuario precisa possuir um campo para "email", "password", precisa implementar os métodos "gen_hash" e "verify". A autenticação só é valida utilizando um endereço de email válido, caso queira utilizar outro campo para autenticação que não siga o padrão de um email, deverá realizar a alteração no modo "hard code" isto é, alterando o plugin na mão.~
+
+É necessário implementar uma classe para a autenticação do usuário, essa classe vai carregar as regras de autenticação de cada aplicação, no caso do exemplo Criei uma classe `Auth` que seguindo a regra implementa dois métodos estáticos `authenticate` e `get_user`. O método `authenticate` pode receber qualquer parametro para autenticação o que flexibiliza como realizar o POST com os dados do usuário, já o método `get_user` obrigatóriamente utiliza o id do usuário, portanto deverá implementar uma forma de consulta utilizando o id.
+
+O método authenticate deve retornar um objeto que possua um atributo com nome `id` para gerar o payload para o Token.
+
+Com a mudança feita não é mais obrigatório o uso de uma classe peewee Model, agora pode utilizar o ORM que quiser e implementar sua própria forma de authenticar um usuário.
 
 Código baseado na lib: https://github.com/agile4you/bottle-jwt
