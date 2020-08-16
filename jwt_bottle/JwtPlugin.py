@@ -1,5 +1,4 @@
 import bottle
-import re
 from operator import attrgetter
 from bottle import PluginError
 
