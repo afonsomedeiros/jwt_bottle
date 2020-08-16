@@ -6,9 +6,6 @@ from bottle import PluginError
 from .jwt_auth import Token
 
 
-email_re = '^[a-z0-9]+[\._]?[a-z0-9]+[@]\w+[.]\w+$'
-
-
 def auth_required(callable):
     setattr(callable, 'auth_required', True)
     return callable
