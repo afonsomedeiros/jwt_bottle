@@ -1,12 +1,16 @@
 import bottle
+import re
 from operator import attrgetter
 from bottle import PluginError
 
 from .jwt_auth import Token
 
 
+email_re = "^[a-z0-9]+[\._]?[a-z0-9]+[@]\w+[.]\w+$"
+
+
 def auth_required(callable):
-    setattr(callable, 'auth_required', True)
+    setattr(callable, "auth_required", True)
     return callable
 
 
@@ -41,19 +45,26 @@ class JWTPlugin(object):
     def setup(self, app):
         for other in app.plugins:
             if not isinstance(other, JWTPlugin):
+
                 @app.post(self.auth_endpoint)
                 def auth_handler():
-                    if hasattr(self.auth_model, 'authenticate') and hasattr(self.auth_model, 'get_user'):
+                    if hasattr(self.auth_model, "authenticate") and hasattr(
+                        self.auth_model, "get_user"
+                    ):
                         data = bottle.request.json
                         user = self.auth_model.authenticate(**data)
-                        if user:
-                            payload = {'id': user.id, 'exp': ''}
+                        if user and type(user) != dict:
+                            payload = {"id": user.id, "exp": ""}
                             token = Token(payload=payload, secret=self.secret)
                             return {"token": token.create()}
+                        elif "error" in user:
+                            return self.auth_model.authenticate(**data)
                         else:
-                            return {'error': "Usuário inválido."}
+                            return {"error": "Usuário inválido."}
                     else:
-                        return {'error': "Classe utilizada para auntenticação não atende o padrão"}
+                        return {
+                            "error": "Classe utilizada para auntenticação não atende o padrão"
+                        }
 
             else:
                 raise PluginError("Encontrado uma outra instancia do plugin.")
@@ -62,23 +73,27 @@ class JWTPlugin(object):
         def injector(*args, **kwargs):
             return callback(*args, **kwargs)
 
-        if not hasattr(callback, 'auth_required'):
+        if not hasattr(callback, "auth_required"):
             return injector
 
         def wrapper(*args, **kwargs):
-            t = bottle.request.get_header('Authorization')
+            t = bottle.request.get_header("Authorization")
 
             if self.refresh:
                 token = Token(secret=self.secret).refresh(t)
                 decoded = Token(secret=self.secret).decode(token)
-                kwargs['token'] = token
+                kwargs["token"] = token
             else:
                 decoded = Token(secret=self.secret).decode(t)
 
-            if hasattr(self.auth_model, 'authenticate') and hasattr(self.auth_model, 'get_user'):
-                kwargs['user'] = self.auth_model.get_user(decoded['id'])
+            if hasattr(self.auth_model, "authenticate") and hasattr(
+                self.auth_model, "get_user"
+            ):
+                kwargs["user"] = self.auth_model.get_user(decoded["id"])
                 return injector(*args, **kwargs)
             else:
-                return {'error': "Classe utilizada para auntenticação não atende o padrão"}
+                return {
+                    "error": "Classe utilizada para auntenticação não atende o padrão"
+                }
 
         return wrapper
