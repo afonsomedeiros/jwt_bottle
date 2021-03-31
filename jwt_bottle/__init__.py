@@ -1,3 +1,3 @@
-from .JwtPlugin import auth_required, JWTPlugin
+from .JwtPlugin import auth_required, JWTPlugin, BaseAuth
 
-__all__ = ['auth_required', 'JwtPlugin']
+__all__ = ['auth_required', 'JWTPlugin', 'BaseAuth']

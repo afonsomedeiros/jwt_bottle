@@ -1,73 +1,129 @@
-import bottle
-import re
-from operator import attrgetter
-from bottle import PluginError
+from typing import Callable, List, Mapping
+from functools import partial
+
+from bottle import Bottle, PluginError, request, response
+from jose.jwt import decode
 
 from .jwt_auth import Token
 
 
-email_re = "^[a-z0-9]+[\._]?[a-z0-9]+[@]\w+[.]\w+$"
-
-
-def auth_required(callable):
+def auth_required(callable: Callable):
     setattr(callable, "auth_required", True)
     return callable
 
 
+class BaseAuth(object):
+    @staticmethod
+    def authenticate(*args, **kwargs):
+        pass
+
+    @staticmethod
+    def get_user(*args, **kwargs):
+        pass
+
+
+class JWTPluginError(Exception):
+    ...
+
+
 class JWTPlugin(object):
-    """Plugin que prove autenticacao e token JWT.
-
-    Args:
-        secret (str): Segredo para criptografar Token
-        auth_model (Python class): Classe que provê métodos de autenticação.
-        A classe precisa implementar dois métodos estáticos:
-            - authenticate.
-            - get_user
-        auth_endpoint (str): Rota de autenticação. Padrão é "/auth"
-        refresh (bool): Determina se é ou não para que token seja atualizavel.
-
-    Raises:
-        PluginError: [description]
-
-    Returns:
-        [type]: [description]
-    """
-
     name = "JWTPlugin"
     api = 2
 
-    def __init__(self, secret, auth_model, auth_endpoint="/auth", refresh=False):
+    def __init__(self, secret: str, configs: List[Mapping[str, object]], payload: List[str] = None, debug: bool = False) -> None:
+        """
+            config: List[Mapping[str, object]]: Objeto que conterá classes e endpoints para autenticação.
+            ex:
+            config[0] -> {'model': AdminAuth, 'endpoint': '/admin/auth'}
+            config[1] -> {'model': UserAuth, 'endpoint': '/auth'}
+
+            A classe responsável pela autenticação (AdminAuth, UserAuth) devem implementar uma interface.
+
+            payload exemplo: {"id": None, "email": None}
+        """
         self.secret = secret
-        self.auth_model = auth_model
-        self.refresh = refresh
-        self.auth_endpoint = auth_endpoint
+        self.configs = configs
+        self.payload = payload
 
-    def setup(self, app):
-        for other in app.plugins:
-            if not isinstance(other, JWTPlugin):
-
-                @app.post(self.auth_endpoint)
-                def auth_handler():
-                    if hasattr(self.auth_model, "authenticate") and hasattr(
-                        self.auth_model, "get_user"
-                    ):
-                        data = bottle.request.json
-                        user = self.auth_model.authenticate(**data)
-                        if user and type(user) != dict:
-                            payload = {"id": user.id, "exp": ""}
-                            token = Token(payload=payload, secret=self.secret)
-                            return {"token": token.create()}
-                        elif "error" in user:
-                            return self.auth_model.authenticate(**data)
-                        else:
-                            return {"error": "Usuário inválido."}
-                    else:
-                        return {
-                            "error": "Classe utilizada para auntenticação não atende o padrão"
-                        }
-
-            else:
+    def setup(self, app: Bottle):
+        for plugin in app.plugins:
+            if isinstance(plugin, JWTPlugin):
                 raise PluginError("Encontrado uma outra instancia do plugin.")
+            else:
+                for config in self.configs:
+                    model = config['model']
+                    if issubclass(model, BaseAuth):
+                        auth_handler_function = """def _AUTHNAMEFUNC_(model, configs, secret, pl={}):
+    data = request.json
+    user = model.authenticate(**data)
+    if not user and len(configs) > 1:
+        return ""
+    payload = {}
+    if pl:
+        for key in pl:
+            payload[key] = getattr(user, key) if hasattr(user, key) else None
+            if payload[key] == None:
+                del payload[key]
+    else:
+        payload["id"] = user.id if hasattr(user, "id") else None
+        if payload["id"] == None:
+            del payload["id"]
+        if not payload:
+            raise JWTPluginError("Modelo não possui nenhum parametro compativel com atributos de autenticação.")
+        if not "exp" in payload:
+            payload['exp'] = ""
+    token = Token(payload=payload, secret=secret, expire_time=0.05)
+    payload['token'] = token.create()
+    refresh_token = Token(payload, secret=secret)
+    response.content_type = "application/json"
+    response.status = 200
+    return {"token": token.create(), "refresh_token": refresh_token.create()}
+"""
+                        refresh_token_handle_function = """def _REFRESHNAMEFUNC_(model, configs, secret, pl={}):
+    rt = request.get_header("Refresh-Jwt")
+    decoded = Token(secret=secret).decode(rt)
+    print(f"decoded -> {decoded}")
+    print(f"pl -> {pl}")
+    token = decoded['token']
+    del decoded['token']
+    user = model.get_user(**decoded)
+    if decoded:
+        payload = {}
+        if pl:
+            for key in pl:
+                payload[key] = getattr(user, key) if hasattr(user, key) else None
+                if payload[key] == None:
+                    del payload[key]
+        else:
+            payload["id"] = user.id if hasattr(user, "id") else None
+            if payload["id"] == None:
+                del payload["id"]
+                if not payload:
+                    raise JWTPluginError("Modelo não possui nenhum parametro compativel com atributos de autenticação.")
+            if not "exp" in rt:
+                payload['exp'] = ""
+        print(f"payload -> {payload}")
+        token = Token(payload=payload, secret=secret, expire_time=0.05)
+        payload['token'] = token.create()
+        refresh_token = Token(payload, secret=secret)
+        response.content_type = "application/json"
+        response.status = 200
+        return {"token": token.create(), "refresh_token": refresh_token.create()}
+"""
+                        auth_handler_function = auth_handler_function.replace(
+                            "_AUTHNAMEFUNC_", config['auth_name'])
+                        exec(auth_handler_function)
+                        refresh_token_handle_function = refresh_token_handle_function.replace(
+                            "_REFRESHNAMEFUNC_", config['refresh_name'])
+                        exec(refresh_token_handle_function)
+                        # model, configs, pl, secret
+                        app.post(config['endpoint'], callback=partial(
+                            eval(config['auth_name']), model, self.configs, self.secret, self.payload))
+                        app.post(f"{config['endpoint']}/refresh",
+                                 callback=partial(eval(config['refresh_name']), model, self.configs, self.secret, self.payload))
+                    else:
+                        raise JWTPluginError(
+                            "Não implementa interface de autenticação.")
 
     def apply(self, callback, context):
         def injector(*args, **kwargs):
@@ -77,23 +133,15 @@ class JWTPlugin(object):
             return injector
 
         def wrapper(*args, **kwargs):
-            t = bottle.request.get_header("Authorization")
+            header_token = request.get_header("Authorization")
 
-            if self.refresh:
-                token = Token(secret=self.secret).refresh(t)
-                decoded = Token(secret=self.secret).decode(token)
-                kwargs["token"] = token
-            else:
-                decoded = Token(secret=self.secret).decode(t)
-
-            if hasattr(self.auth_model, "authenticate") and hasattr(
-                self.auth_model, "get_user"
-            ):
-                kwargs["user"] = self.auth_model.get_user(decoded["id"])
-                return injector(*args, **kwargs)
-            else:
-                return {
-                    "error": "Classe utilizada para auntenticação não atende o padrão"
-                }
+            decoded = Token(secret=self.secret).decode(header_token)
+            for config in self.configs:
+                model = config['model']
+                user = model.get_user(**decoded)
+                if user:
+                    kwargs["user"] = user
+                    return injector(*args, **kwargs)
+            return injector(*args, **kwargs)
 
         return wrapper
