@@ -17,7 +17,7 @@ packaging==20.3
 pep517==0.8.2
 progress==1.5
 pyasn1==0.4.8
-Pygments==2.7.4
+Pygments==2.15.0
 pyparsing==2.4.6
 python-jose==3.1.0
 pytoml==0.1.21
